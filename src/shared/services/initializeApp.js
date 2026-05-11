@@ -17,6 +17,7 @@ import {
   WATCHDOG_INTERVAL_MS, NETWORK_CHECK_INTERVAL_MS,
 } from "@/lib/tunnel/tunnelConfig";
 import { getMitmStatus, startMitm, loadEncryptedPassword, initDbHooks, restoreToolDNS, removeAllDNSEntriesSync } from "@/mitm/manager";
+import { syncToJson as syncMitmAliasCache } from "@/lib/mitmAliasCache";
 
 // Inject correct paths and DB hooks into manager.js (CJS) from ESM context
 (function bootstrapMitm() {
@@ -41,6 +42,8 @@ const g = global.__appSingleton ??= {
   lastNetworkFingerprint: null,
   lastWatchdogTick: Date.now(),
   mitmStartInProgress: false,
+  tunnelAutoResumed: false,
+  tailscaleAutoResumed: false,
 };
 
 export async function initializeApp() {
@@ -48,14 +51,16 @@ export async function initializeApp() {
     await cleanupProviderConnections();
     const settings = await getSettings();
 
-    // Auto-resume tunnel
-    if (settings.tunnelEnabled) {
+    // Auto-resume tunnel (once per process)
+    if (settings.tunnelEnabled && !g.tunnelAutoResumed) {
+      g.tunnelAutoResumed = true;
       console.log("[InitApp] Tunnel was enabled, auto-resuming...");
       safeRestartTunnel("startup").catch((e) => console.log("[InitApp] Tunnel resume failed:", e.message));
     }
 
-    // Auto-resume tailscale
-    if (settings.tailscaleEnabled) {
+    // Auto-resume tailscale (once per process)
+    if (settings.tailscaleEnabled && !g.tailscaleAutoResumed) {
+      g.tailscaleAutoResumed = true;
       console.log("[InitApp] Tailscale was enabled, auto-resuming...");
       safeRestartTailscale("startup").catch((e) => console.log("[InitApp] Tailscale resume failed:", e.message));
     }
@@ -73,6 +78,9 @@ export async function initializeApp() {
     }
 
     ensureCloudflared().catch(() => {});
+
+    // Sync mitmAlias DB → JSON cache so standalone MITM server can read it
+    syncMitmAliasCache().catch(() => {});
 
     startWatchdog();
     startNetworkMonitor();
